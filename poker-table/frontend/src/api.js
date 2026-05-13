@@ -5,8 +5,8 @@ const api = axios.create({ baseURL: `${API_URL}/api` });
 
 export const checkTableStatus = () => api.get("/game/status");
 
-export const createSession = (playerNames) =>
-  api.post("/game/create", { playerNames });
+export const createSession = (playerNames, chipCounts = [], smallBlind = 10, bigBlind = 20) =>
+  api.post("/game/create", { playerNames, chipCounts, smallBlind, bigBlind });
 
 export const joinSession = (code) =>
   api.get(`/game/join/${code}`);
@@ -22,3 +22,9 @@ export const endSession = (sessionCode) =>
 
 export const resetPlayer = (sessionCode, seat) =>
   api.post("/game/reset-player", { sessionCode, seat });
+
+export const nextHand = (sessionCode, winningSeat) =>
+  api.post("/game/next-hand", { sessionCode, winningSeat });
+
+export const undoAction = (sessionCode) =>
+  api.post("/game/undo", { sessionCode });

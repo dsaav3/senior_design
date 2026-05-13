@@ -96,7 +96,7 @@ const SpectatorView = () => {
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col items-center p-4 gap-4 max-w-3xl mx-auto w-full">
+      <div className="flex-1 flex flex-col items-center p-4 gap-4 w-full">
         <SessionCodeDisplay code={sessionCode} spectatorCount={spectatorCount} />
 
         {session.lastEsp32Update && (

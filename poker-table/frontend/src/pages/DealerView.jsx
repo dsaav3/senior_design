@@ -4,7 +4,7 @@ import PokerTable from "../components/PokerTable";
 import BetControls from "../components/BetControls";
 import SessionCodeDisplay from "../components/SessionCodeDisplay";
 import useGameState from "../hooks/useGameState";
-import { advancePhase, endSession, resetPlayer, joinSession as apiJoin } from "../api";
+import { advancePhase, endSession, resetPlayer, joinSession as apiJoin, nextHand, undoAction } from "../api";
 
 const PHASES = ["pre-flop", "flop", "turn", "river", "showdown"];
 
@@ -23,35 +23,55 @@ const DealerView = () => {
   const [initialSession, setInitialSession] = useState(null);
   const [phaseLoading, setPhaseLoading] = useState(false);
   const [endLoading, setEndLoading] = useState(false);
+  const [nextHandLoading, setNextHandLoading] = useState(false);
+  const [undoLoading, setUndoLoading] = useState(false);
+  const [winningSeat, setWinningSeat] = useState(null);
   const [error, setError] = useState("");
 
   // Load initial state from API
   useEffect(() => {
+    if (!sessionCode) return;
+    
+    const timeout = setTimeout(() => {
+      if (!initialSession) {
+        setError("Session load timeout. Please try again.");
+      }
+    }, 5000);
+
     apiJoin(sessionCode)
-      .then((res) => setInitialSession(res.data.session))
-      .catch(() => navigate("/"));
+      .then((res) => {
+        clearTimeout(timeout);
+        setInitialSession(res.data.session);
+      })
+      .catch((err) => {
+        clearTimeout(timeout);
+        console.error("Failed to join session:", err);
+        setError("Failed to load session. Redirecting...");
+        setTimeout(() => navigate("/"), 2000);
+      });
+
+    return () => clearTimeout(timeout);
+  }, [sessionCode, navigate]);
+
+  // Handle beforeunload to end session
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (sessionCode) {
+        navigator.sendBeacon(
+          `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/game/end`,
+          JSON.stringify({ sessionCode })
+        );
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [sessionCode]);
 
   const { gameState, setGameState, spectatorCount, connectionStatus } =
     useGameState(sessionCode, initialSession);
 
   const session = gameState || initialSession;
-
-  const handleNextPhase = async () => {
-    if (!session) return;
-    const next = PHASE_NEXT[session.phase];
-    if (!next) return;
-    setPhaseLoading(true);
-    setError("");
-    try {
-      const res = await advancePhase(sessionCode, next);
-      setGameState(res.data.session);
-    } catch (err) {
-      setError("Failed to advance phase");
-    } finally {
-      setPhaseLoading(false);
-    }
-  };
 
   const handleEndSession = async () => {
     if (!confirm("Are you sure you want to end this game session?")) return;
@@ -74,10 +94,59 @@ const DealerView = () => {
     }
   };
 
+  const handleNextHand = async () => {
+    if (!winningSeat) {
+      setError("Please select a winning player");
+      return;
+    }
+    setNextHandLoading(true);
+    setError("");
+    try {
+      const res = await nextHand(sessionCode, winningSeat);
+      setGameState(res.data.session);
+      setWinningSeat(null);
+    } catch (err) {
+      setError("Failed to advance to next hand");
+    } finally {
+      setNextHandLoading(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    setUndoLoading(true);
+    setError("");
+    try {
+      const res = await undoAction(sessionCode);
+      setGameState(res.data.session);
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to undo action");
+    } finally {
+      setUndoLoading(false);
+    }
+  };
+
+  const handleNextPhase = async () => {
+    const nextPhaseValue = PHASE_NEXT[session.phase];
+    if (!nextPhaseValue) return;
+    setPhaseLoading(true);
+    setError("");
+    try {
+      const res = await advancePhase(sessionCode, nextPhaseValue);
+      setGameState(res.data.session);
+    } catch (err) {
+      setError("Failed to advance phase");
+    } finally {
+      setPhaseLoading(false);
+    }
+  };
+
   if (!session) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
         <span className="text-white/50 animate-pulse font-mono">Loading session...</span>
+        {error && (
+          <p className="text-red-400 text-sm">{error}</p>
+        )}
       </div>
     );
   }
@@ -196,12 +265,28 @@ const DealerView = () => {
             <span className="text-xs text-white/30">Pot: ${session.pot}</span>
           </div>
 
+          {/* Undo button */}
+          <button
+            onClick={handleUndo}
+            disabled={undoLoading || !session.actionHistory?.length}
+            className="w-full text-xs py-2 rounded-lg font-semibold transition-all disabled:opacity-40"
+            style={{
+              background: "rgba(212,168,67,0.1)",
+              border: "1px solid rgba(212,168,67,0.3)",
+              color: "#d4a843",
+            }}
+          >
+            {undoLoading ? "Undoing..." : "↶ Undo Last Action"}
+          </button>
+
           {session.players.map((player) => (
             <div key={player.seat} className="space-y-1">
               <BetControls
                 player={player}
                 sessionCode={sessionCode}
                 onUpdate={setGameState}
+                isActiveTurn={player.seat === session.activePlayerSeat}
+                currentBet={session.currentBet}
               />
               {(player.action === "fold" || !player.isActive) && (
                 <button
@@ -213,6 +298,38 @@ const DealerView = () => {
               )}
             </div>
           ))}
+
+          {/* Next hand section - appears in showdown */}
+          {session.phase === "showdown" && (
+            <div className="pt-3 border-t border-white/10 space-y-2">
+              <label className="text-xs text-white/40 uppercase tracking-widest font-semibold">
+                Next Hand - Choose Winner
+              </label>
+              <select
+                value={winningSeat || ""}
+                onChange={(e) => setWinningSeat(Number(e.target.value))}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold-400"
+              >
+                <option value="">Select winning player...</option>
+                {session.players.map((p) => (
+                  <option key={p.seat} value={p.seat}>
+                    Seat {p.seat} - {p.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleNextHand}
+                disabled={nextHandLoading || !winningSeat}
+                className="w-full py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+                style={{
+                  background: "linear-gradient(135deg, #d4a843, #e8c46a)",
+                  color: "#1a0f07",
+                }}
+              >
+                {nextHandLoading ? "Starting..." : "Start Next Hand"}
+              </button>
+            </div>
+          )}
 
           {error && <p className="text-red-400 text-xs text-center">{error}</p>}
         </div>

@@ -10,9 +10,9 @@ const ACTIONS = [
 
 /**
  * BetControls — dealer control panel for a single player seat.
- * Props: player, sessionCode, onUpdate(updatedSession)
+ * Props: player, sessionCode, onUpdate(updatedSession), isActiveTurn, currentBet
  */
-const BetControls = ({ player, sessionCode, onUpdate }) => {
+const BetControls = ({ player, sessionCode, onUpdate, isActiveTurn = false, currentBet = 0 }) => {
   const [raiseAmount, setRaiseAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -29,13 +29,15 @@ const BetControls = ({ player, sessionCode, onUpdate }) => {
       if (onUpdate) onUpdate(res.data.session);
       if (action === "raise") setRaiseAmount("");
     } catch (err) {
-      setError(err.response?.data?.message || "Action failed");
+      setError(err.response?.data?.message || err.response?.data?.error || "Action failed");
     } finally {
       setLoading(false);
     }
   };
 
   const isFolded = player.action === "fold" || !player.isActive;
+  const canCheck = currentBet === 0 || player.bet === currentBet;
+  const isCheckDisabled = !canCheck;
 
   return (
     <div
@@ -63,20 +65,26 @@ const BetControls = ({ player, sessionCode, onUpdate }) => {
 
       {isFolded ? (
         <div className="text-xs text-gray-500 text-center py-1">Folded</div>
+      ) : !isActiveTurn ? (
+        <div className="text-xs text-white/40 text-center py-2 italic">Waiting for turn...</div>
       ) : (
         <>
           {/* Standard action buttons */}
           <div className="grid grid-cols-2 gap-1.5">
-            {ACTIONS.map((a) => (
-              <button
-                key={a.key}
-                onClick={() => handleAction(a.key)}
-                disabled={loading}
-                className={`${a.color} text-white text-xs font-semibold py-1.5 px-2 rounded-lg transition-all duration-150 disabled:opacity-40 active:scale-95`}
-              >
-                {a.label}
-              </button>
-            ))}
+            {ACTIONS.map((a) => {
+              const isDisabled = loading || (a.key === "check" && isCheckDisabled);
+              return (
+                <button
+                  key={a.key}
+                  onClick={() => handleAction(a.key)}
+                  disabled={isDisabled}
+                  title={a.key === "check" && isCheckDisabled ? "Cannot check — a bet has been made" : ""}
+                  className={`${a.color} text-white text-xs font-semibold py-1.5 px-2 rounded-lg transition-all duration-150 disabled:opacity-40 active:scale-95`}
+                >
+                  {a.label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Raise amount */}
@@ -86,7 +94,8 @@ const BetControls = ({ player, sessionCode, onUpdate }) => {
               value={raiseAmount}
               onChange={(e) => setRaiseAmount(e.target.value)}
               placeholder="Raise $"
-              className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-gold-400"
+              disabled={loading}
+              className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-gold-400 disabled:opacity-50"
               style={{ "--tw-border-opacity": 1 }}
               min="1"
             />
@@ -101,7 +110,11 @@ const BetControls = ({ player, sessionCode, onUpdate }) => {
         </>
       )}
 
-      {error && <p className="text-red-400 text-xs">{error}</p>}
+      {error && (
+        <p className="text-red-400 text-xs bg-red-500/10 px-2 py-1.5 rounded border border-red-500/20">
+          {error}
+        </p>
+      )}
     </div>
   );
 };

@@ -12,6 +12,9 @@ const Home = () => {
 
   // Create session form
   const [playerNames, setPlayerNames] = useState(["", "", "", ""]);
+  const [chipCounts, setChipCounts] = useState([1000, 1000, 1000, 1000]);
+  const [smallBlind, setSmallBlind] = useState(10);
+  const [bigBlind, setBigBlind] = useState(20);
   const [creating, setCreating] = useState(false);
 
   // Join session form
@@ -39,7 +42,7 @@ const Home = () => {
     setCreating(true);
     setError("");
     try {
-      const res = await createSession(playerNames);
+      const res = await createSession(playerNames, chipCounts, smallBlind, bigBlind);
       navigate(`/dealer/${res.data.session.sessionCode}`);
     } catch (err) {
       if (err.response?.data?.error === "TABLE_IN_USE") {
@@ -72,6 +75,12 @@ const Home = () => {
     const updated = [...playerNames];
     updated[i] = val;
     setPlayerNames(updated);
+  };
+
+  const handleChipCountChange = (i, val) => {
+    const updated = [...chipCounts];
+    updated[i] = Math.max(0, Number(val) || 0);
+    setChipCounts(updated);
   };
 
   return (
@@ -117,19 +126,58 @@ const Home = () => {
             >
               <h2 className="font-display text-xl text-white/90">Start as Dealer</h2>
               <form onSubmit={handleCreate} className="space-y-3">
+                {/* Player names and chip counts */}
                 <div className="grid grid-cols-2 gap-2">
                   {playerNames.map((name, i) => (
-                    <input
-                      key={i}
-                      type="text"
-                      value={name}
-                      onChange={(e) => handleNameChange(i, e.target.value)}
-                      placeholder={`Player ${i + 1} name`}
-                      maxLength={20}
-                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-gold-400 transition-colors"
-                    />
+                    <div key={i} className="flex flex-col gap-1">
+                      <input
+                        type="text"
+                        value={name}
+                        onChange={(e) => handleNameChange(i, e.target.value)}
+                        placeholder={`Player ${i + 1} name`}
+                        maxLength={20}
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-gold-400 transition-colors"
+                      />
+                      <input
+                        type="number"
+                        value={chipCounts[i]}
+                        onChange={(e) => handleChipCountChange(i, e.target.value)}
+                        placeholder="Chip count"
+                        min="0"
+                        className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-gold-400 transition-colors"
+                      />
+                    </div>
                   ))}
                 </div>
+
+                {/* Blind amounts */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-white/40 uppercase tracking-widest font-semibold">
+                      Small Blind
+                    </label>
+                    <input
+                      type="number"
+                      value={smallBlind}
+                      onChange={(e) => setSmallBlind(Math.max(1, Number(e.target.value) || 10))}
+                      min="1"
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-gold-400 transition-colors"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-white/40 uppercase tracking-widest font-semibold">
+                      Big Blind
+                    </label>
+                    <input
+                      type="number"
+                      value={bigBlind}
+                      onChange={(e) => setBigBlind(Math.max(1, Number(e.target.value) || 20))}
+                      min="1"
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-gold-400 transition-colors"
+                    />
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   disabled={creating}

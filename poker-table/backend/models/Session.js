@@ -23,6 +23,7 @@ const PlayerSchema = new mongoose.Schema(
     },
     bet: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },    // false = folded
+    chipCount: { type: Number, default: 1000 },    // Player's current chip stack
   },
   { _id: false }
 );
@@ -54,6 +55,10 @@ const SessionSchema = new mongoose.Schema(
     currentBet: { type: Number, default: 0 },
     activePlayerSeat: { type: Number, default: 1 },      // whose turn it is
     dealerSeat: { type: Number, default: 1 },
+    smallBlind: { type: Number, default: 10 },           // Small blind amount
+    bigBlind: { type: Number, default: 20 },             // Big blind amount
+    turnOrder: { type: [Number], default: [1, 2, 3, 4] }, // Ordered seat numbers for turn rotation
+    actionHistory: { type: Array, default: [] },         // History of actions for undo feature
     spectatorCount: { type: Number, default: 0 },
     lastEsp32Update: { type: Date, default: null },
   },
