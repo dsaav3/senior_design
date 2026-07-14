@@ -11,6 +11,33 @@ const validateApiKey = (req, res, next) => {
   next();
 };
 
+// ── Card token parsing ────────────────────────────────────────────────────────
+// The main ESP32 board identifies cards from its NFC card map as compact
+// tokens like "Ac", "10d", "Kh" (rank + suit letter). This converts those
+// tokens (or already-structured { rank, suit } objects) into the CardSchema
+// shape the Session model expects. Unrecognized tokens (e.g. "None", raw
+// unmapped UIDs) are dropped rather than stored.
+const SUIT_CODES = { c: "clubs", d: "diamonds", h: "hearts", s: "spades" };
+
+const parseCardToken = (token) => {
+  if (token && typeof token === "object" && token.rank && token.suit) {
+    return { rank: String(token.rank), suit: String(token.suit).toLowerCase() };
+  }
+
+  if (typeof token !== "string") return null;
+
+  const raw = token.trim();
+  if (!raw || raw.toLowerCase() === "none") return null;
+
+  const match = raw.match(/^(10|[2-9]|[AKQJakqj])([cdhsCDHS])$/);
+  if (!match) return null;
+
+  const suit = SUIT_CODES[match[2].toLowerCase()];
+  if (!suit) return null;
+
+  return { rank: match[1].toUpperCase(), suit };
+};
+
 // ── POST /api/esp32/update ────────────────────────────────────────────────────
 /**
  * Main endpoint the ESP32 calls every time game state changes.
@@ -22,19 +49,12 @@ const validateApiKey = (req, res, next) => {
  *   "players": [
  *     {
  *       "seat": 1,
- *       "cards": [
- *         { "rank": "A", "suit": "spades" },
- *         { "rank": "K", "suit": "hearts" }
- *       ],
+ *       "cards": ["Ac", "Kh"],        // compact tokens, or [{rank,suit}, ...]
  *       "winOdds": 67.4
  *     },
  *     ...
  *   ],
- *   "communityCards": [
- *     { "rank": "7", "suit": "clubs" },
- *     { "rank": "J", "suit": "diamonds" },
- *     { "rank": "2", "suit": "spades" }
- *   ]
+ *   "communityCards": ["7c", "Jd", "2s"]
  * }
  */
 router.post("/update", validateApiKey, async (req, res) => {
@@ -59,7 +79,7 @@ router.post("/update", validateApiKey, async (req, res) => {
 
     // Update community cards
     if (Array.isArray(communityCards)) {
-      session.communityCards = communityCards.slice(0, 5);
+      session.communityCards = communityCards.map(parseCardToken).filter(Boolean).slice(0, 5);
     }
 
     // Update player cards + odds from ESP32 data
@@ -68,7 +88,7 @@ router.post("/update", validateApiKey, async (req, res) => {
         const player = session.players.find((p) => p.seat === esp32Player.seat);
         if (player) {
           if (Array.isArray(esp32Player.cards)) {
-            player.cards = esp32Player.cards.slice(0, 2);
+            player.cards = esp32Player.cards.map(parseCardToken).filter(Boolean).slice(0, 2);
           }
           if (typeof esp32Player.winOdds === "number") {
             player.winOdds = Math.min(100, Math.max(0, esp32Player.winOdds));
@@ -93,6 +113,45 @@ router.post("/update", validateApiKey, async (req, res) => {
     res.json({ success: true, updated: new Date().toISOString() });
   } catch (err) {
     console.error("ESP32 update error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/esp32/state ──────────────────────────────────────────────────────
+/**
+ * Polled by the ESP32 to learn the dealer-controlled game phase (pre-flop,
+ * flop, turn, river, showdown) and which seats have folded. The website is
+ * the source of truth for both — the dealer advances phase via
+ * POST /api/game/phase and folds a player via POST /api/game/action — so the
+ * ESP32 reads them here instead of tracking phase itself. A folded seat's
+ * hole cards must be excluded from equity/odds calculations on the ESP32.
+ */
+router.get("/state", validateApiKey, async (req, res) => {
+  try {
+    const session = await Session.findOne({
+      status: { $in: ["waiting", "active"] },
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "SESSION_NOT_FOUND" });
+    }
+
+    res.json({
+      success: true,
+      sessionCode: session.sessionCode,
+      status: session.status,
+      phase: session.phase,
+      communityCards: session.communityCards,
+      players: session.players.map((p) => ({
+        seat: p.seat,
+        name: p.name,
+        chipCount: p.chipCount,
+        bet: p.bet,
+        action: p.action,
+        folded: !p.isActive,
+      })),
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
