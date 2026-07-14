@@ -61,15 +61,15 @@ const int COMM_BUSY    = 26;
 // ============================================================
 // WiFi / Backend Configuration
 // ============================================================
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "Diego's iPhone";
+const char* WIFI_PASSWORD = "12345678";
 
 // Base URL only (no trailing slash) — e.g. "http://192.168.1.50:3001"
 // or "https://your-backend.railway.app"
-const char* BACKEND_HOST  = "http://192.168.1.50:3001";
+const char* BACKEND_HOST  = "http://172.20.10.6:3001";
 
 // Must match ESP32_API_KEY in backend/.env
-const char* ESP32_API_KEY = "your-secret-esp32-key-here";
+const char* ESP32_API_KEY = "srpt";
 
 const unsigned long BACKEND_POLL_INTERVAL_MS = 1000;  // how often to read phase/fold state
 const unsigned long BACKEND_PUSH_INTERVAL_MS = 1000;  // how often to push cards/odds
