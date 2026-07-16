@@ -36,6 +36,8 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
+#include <Adafruit_INA219.h>
+#include <Adafruit_MCP9808.h>
 #include "equity_calculations.h"
 
 // ============================================================
@@ -60,6 +62,9 @@ const int COMM_NSS     = 4;
 const int COMM_BUSY    = 26;
 // const int RIVER_BUSY   = 27;
 
+// LM386 audio amplifier — maps to Pin 16 on the WROOM module.
+const int AUDIO_PIN    = 13;
+
 // ============================================================
 // WiFi / Backend Configuration
 // ============================================================
@@ -68,7 +73,7 @@ const char* WIFI_PASSWORD = "password";
 
 // Base URL only (no trailing slash) — e.g. "http://192.168.1.50:3001"
 // or "https://your-backend.railway.app"
-const char* BACKEND_HOST  = "http://172.20.10.10:3001";
+const char* BACKEND_HOST  = "http://172.20.10.6:3001";
 
 // Must match ESP32_API_KEY in backend/.env
 const char* ESP32_API_KEY = "srpt";
@@ -111,6 +116,31 @@ const unsigned long BACKEND_PUSH_INTERVAL_MS = 1000;  // how often to push cards
 // LCD
 // ============================================================
 LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// ============================================================
+// Power Telemetry (INA219 current/voltage + MCP9808 temperature)
+// Shares the LCD's I2C bus (SDA=21, SCL=22) — no separate Wire.begin().
+// ============================================================
+Adafruit_INA219 ina219;
+Adafruit_MCP9808 mcp9808;
+
+bool telemetryAvailable = false;   // false if either sensor failed to init — telemetry is skipped entirely rather than halting the whole board
+float telemetryLoadVoltage = 0;
+float telemetryCurrent_mA = 0;
+float telemetryPower_mW = 0;
+float telemetryTempC = 0;
+
+const unsigned long TELEMETRY_READ_INTERVAL_MS = 2000;
+
+// The 20x4 LCD has no spare lines, so the telemetry screen time-shares it
+// with the existing game-status screen (updateMainLCD()) rather than
+// fighting over the same 4 rows. Any game-status/error screen forces an
+// immediate switch back to itself and restarts the status dwell time, so an
+// active game prompt is never displaced mid-hand — see markStatusScreenShown().
+bool showingTelemetryScreen = false;
+uint32_t lastScreenSwitchMs = 0;
+const uint32_t STATUS_SCREEN_DWELL_MS = 4000;
+const uint32_t TELEMETRY_SCREEN_DWELL_MS = 2000;
 
 // ============================================================
 // MAIN BOARD / ESP-NOW SETTINGS
@@ -159,6 +189,30 @@ typedef struct {
 typedef struct {
   char command[12];   // "RESET"
 } HostCommandPacket;
+
+// Main board -> player board, sent whenever equity is recomputed for a
+// ready, non-folded seat (see pushHandInfoToAllReadyPlayers()). Distinct
+// size from HostCommandPacket (12 bytes) so the player board can tell them
+// apart by packet length, same pattern already used there.
+//
+// `sequence` guards against a real ESP-NOW ordering bug found the first
+// time this shipped: it's fire-and-forget, with no delivery-order
+// guarantee, so if two updates go out close together (e.g. one after an
+// intermediate community card, one right after the card that completes a
+// royal flush), the OLDER one can arrive at the player board after the
+// newer one and silently overwrite the correct display — which is exactly
+// what happened (LCD showed "High Card" for a made royal flush, while the
+// website — reading the same underlying data, just not subject to this
+// race — showed it correctly). The player board now drops any packet
+// whose sequence isn't newer than the last one it displayed, the same way
+// PlayerCardsPacket.sequence already protects the other direction.
+typedef struct {
+  char handShortCode[4];  // e.g. "2P", "STR", "RF" — short enough for a 1602 LCD
+  float straightPct;
+  float flushPct;
+  float fullHousePct;
+  uint32_t sequence;
+} PlayerHandInfoPacket;
 
 // ============================================================
 // Main Board State
@@ -239,7 +293,25 @@ float playerWinOdds[5] = {0, 0, 0, 0, 0};
 // rather than re-running the Monte Carlo simulation on a fixed timer.
 float g_winOdds[5] = {0, 0, 0, 0, 0};
 String playerHandName[5] = {"", "", "", "", ""}; // e.g. "Two Pair", "" if not yet known
+String playerHandShortCode[5] = {"", "", "", "", ""}; // e.g. "2P" — sent to the player's 1602 LCD
 #define EQUITY_ITERATIONS 1500
+
+// Cached per-seat probability (0-100) of the FINAL hand being straight/
+// flush/full house OR BETTER — computed by computeAllCategoryOdds(), a
+// separate Monte Carlo pass that does not touch equity_calculate() or
+// g_winOdds[] above. Pushed to each player's own 1602 LCD (see
+// pushHandInfoToAllReadyPlayers()) — the total win-odds equity calculation
+// itself is unchanged.
+float g_straightPct[5] = {0, 0, 0, 0, 0};
+float g_flushPct[5] = {0, 0, 0, 0, 0};
+float g_fullHousePct[5] = {0, 0, 0, 0, 0};
+#define CATEGORY_ODDS_ITERATIONS EQUITY_ITERATIONS
+
+// Incremented once per updateHandEquityInfo() call, stamped into every
+// PlayerHandInfoPacket sent out from that call — lets each player board
+// detect and drop an out-of-order (stale) packet. See PlayerHandInfoPacket
+// above for why this exists.
+uint32_t g_equityUpdateSequence = 0;
 
 // ============================================================
 // Reader Struct
@@ -800,7 +872,18 @@ void updateReadyStatus() {
 // LCD / Debug Display
 // ============================================================
 
+// Call at the top of any function that draws a game-status/error screen
+// directly to the LCD, so the telemetry auto-cycle doesn't overwrite it a
+// moment later — it forces "status" to be the active screen and restarts
+// the full status dwell time.
+void markStatusScreenShown() {
+  showingTelemetryScreen = false;
+  lastScreenSwitchMs = millis();
+}
+
 void updateMainLCD() {
+  markStatusScreenShown();
+
   lcd.clear();
 
   lcd.setCursor(0, 0);
@@ -828,6 +911,114 @@ void updateMainLCD() {
   } else {
     lcd.print("Collecting cards");
   }
+}
+
+// ============================================================
+// Power Telemetry (INA219 + MCP9808)
+// ============================================================
+
+void readTelemetrySensors() {
+  if (!telemetryAvailable) return;
+
+  float shuntVoltage_mV = ina219.getShuntVoltage_mV();
+  telemetryLoadVoltage = ina219.getBusVoltage_V() + (shuntVoltage_mV / 1000);
+  telemetryCurrent_mA = ina219.getCurrent_mA();
+  telemetryPower_mW = ina219.getPower_mW();
+
+  sensors_event_t event;
+  mcp9808.getEvent(&event);
+  telemetryTempC = event.temperature;
+}
+
+void drawTelemetryScreen() {
+  if (!telemetryAvailable) return;
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Volt:  ");
+  lcd.print(telemetryLoadVoltage, 2);
+  lcd.print("V");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Curr:  ");
+  lcd.print(telemetryCurrent_mA, 1);
+  lcd.print("mA");
+
+  lcd.setCursor(0, 2);
+  lcd.print("Power: ");
+  lcd.print(telemetryPower_mW, 1);
+  lcd.print("mW");
+
+  lcd.setCursor(0, 3);
+  lcd.print("Temp:  ");
+  lcd.print(telemetryTempC, 1);
+  lcd.print("C");
+}
+
+// Reads the sensors on their own 2-second timer, independent of which
+// screen happens to be showing right now.
+void handleTelemetryRead() {
+  if (!telemetryAvailable) return;
+
+  static uint32_t lastRead = 0;
+  uint32_t now = millis();
+  if (now - lastRead < TELEMETRY_READ_INTERVAL_MS) return;
+  lastRead = now;
+
+  readTelemetrySensors();
+
+  // If telemetry is the screen currently on-display, refresh it immediately
+  // so the numbers feel live rather than waiting for the next screen swap.
+  if (showingTelemetryScreen) {
+    drawTelemetryScreen();
+  }
+}
+
+// Auto-cycles the LCD between the game-status screen and the telemetry
+// screen. Any game event that calls updateMainLCD() (or another status/
+// error screen that calls markStatusScreenShown()) immediately takes over
+// and restarts the status dwell time, so telemetry never displaces an
+// active game prompt — it only shows up during the normal lulls between
+// status updates. Skipped entirely if the sensors never came up.
+void handleDisplayCycle() {
+  if (!telemetryAvailable) return;
+
+  uint32_t now = millis();
+  uint32_t dwell = showingTelemetryScreen ? TELEMETRY_SCREEN_DWELL_MS : STATUS_SCREEN_DWELL_MS;
+
+  if (now - lastScreenSwitchMs < dwell) return;
+  lastScreenSwitchMs = now;
+  showingTelemetryScreen = !showingTelemetryScreen;
+
+  if (showingTelemetryScreen) {
+    drawTelemetryScreen();
+  } else {
+    updateMainLCD();
+  }
+}
+
+// ============================================================
+// Audio (LM386 amplifier + speaker on AUDIO_PIN)
+// ============================================================
+
+void playBeep(int freqHz, int durationMs) {
+  tone(AUDIO_PIN, freqHz);
+  delay(durationMs);
+  noTone(AUDIO_PIN);
+}
+
+// Three beeps on main-board reset/initialization.
+void playBootChime() {
+  for (int i = 0; i < 3; i++) {
+    playBeep(880, 120);
+    delay(80);
+  }
+}
+
+// One beep whenever a new hand starts.
+void playNewHandChime() {
+  playBeep(660, 150);
 }
 
 void printCurrentGameState() {
@@ -929,6 +1120,7 @@ void handleCommunityCardReader() {
           Serial.print("Duplicate community card ignored: ");
           Serial.println(scannedCard);
 
+          markStatusScreenShown();
           lcd.clear();
           lcd.setCursor(0, 0);
           lcd.print("Duplicate card");
@@ -1040,6 +1232,10 @@ void clearRoundDataOnly() {
   for (int seat = 1; seat <= 4; seat++) {
     g_winOdds[seat] = 0.0;
     playerHandName[seat] = "";
+    playerHandShortCode[seat] = "";
+    g_straightPct[seat] = 0.0;
+    g_flushPct[seat] = 0.0;
+    g_fullHousePct[seat] = 0.0;
   }
 
   mainState = ROUND_COLLECTING_DATA;
@@ -1167,11 +1363,41 @@ void handleIncomingPlayerPacket(const uint8_t *incomingData, int len) {
   printCurrentGameState();
 }
 
+// ESP-NOW receive callbacks run on the WiFi/network task, not the main
+// loop() task. handleIncomingPlayerPacket() calls updateHandEquityInfo(),
+// which (via pushHandInfoToAllReadyPlayers()) calls esp_now_send() to push
+// each ready seat's hand short-code + category odds back to their own
+// player board — including the full computeAllCategoryOdds() Monte Carlo
+// pass. This was suspected as a contributor to a round of total send
+// failures, but that turned out to be a bad main-board chip, unrelated to
+// this code. Deferring the actual handling (sends included) to loop()
+// instead of doing it directly in the receive callback — see
+// handlePendingPlayerPacket() below — is kept anyway: calling
+// esp_now_send() re-entrantly from inside a receive callback is still not
+// something the WiFi/ESP-NOW stack is designed for, so this remains
+// strictly safer regardless of what actually caused that incident. The
+// callback itself just copies the packet and sets a flag.
+volatile bool incomingPlayerPacketPending = false;
+uint8_t incomingPlayerPacketBuffer[sizeof(PlayerCardsPacket)];
+int incomingPlayerPacketLen = 0;
+
 // ESP32 Arduino core 3.x callback
 void onDataReceived(const esp_now_recv_info_t *recvInfo,
                     const uint8_t *incomingData,
                     int len) {
-  handleIncomingPlayerPacket(incomingData, len);
+  if (len > 0 && (size_t)len <= sizeof(incomingPlayerPacketBuffer)) {
+    memcpy(incomingPlayerPacketBuffer, incomingData, len);
+    incomingPlayerPacketLen = len;
+    incomingPlayerPacketPending = true;
+  }
+}
+
+// Called every loop() iteration — does the real work that onDataReceived()
+// used to do directly, but from the main task instead of the WiFi task.
+void handlePendingPlayerPacket() {
+  if (!incomingPlayerPacketPending) return;
+  incomingPlayerPacketPending = false;
+  handleIncomingPlayerPacket(incomingPlayerPacketBuffer, incomingPlayerPacketLen);
 }
 
 // ESP32 Arduino core 3.x callback
@@ -1316,10 +1542,30 @@ void computeAllWinOdds() {
   }
 }
 
+// Short (<=3 char) code for a hand category, for the player's 1602 LCD
+// (which has nowhere near enough room for "Three of a Kind"/etc). Purely a
+// display label — has no bearing on equity_hand_category()'s own logic.
+const char *handShortCode(HandCategory category) {
+  switch (category) {
+    case HAND_HIGH_CARD:        return "HC";
+    case HAND_PAIR:              return "PR";
+    case HAND_TWO_PAIR:          return "2P";
+    case HAND_THREE_OF_A_KIND:   return "3K";
+    case HAND_STRAIGHT:          return "STR";
+    case HAND_FLUSH:             return "FL";
+    case HAND_FULL_HOUSE:        return "FH";
+    case HAND_FOUR_OF_A_KIND:    return "4K";
+    case HAND_STRAIGHT_FLUSH:    return "SF";
+    case HAND_ROYAL_FLUSH:       return "RF";
+    default:                     return "--";
+  }
+}
+
 // Determines each live seat's current best-hand name (e.g. "Two Pair") from
 // their hole cards plus however many community cards are on the board,
-// caching results in playerHandName[]. Folded or not-yet-dealt seats get
-// an empty string (nothing to display).
+// caching results in playerHandName[] (full name, for the website) and
+// playerHandShortCode[] (abbreviated, for the player's own 1602 LCD).
+// Folded or not-yet-dealt seats get empty strings (nothing to display).
 void computeAllHandNames() {
   EqCard eqCommunity[5];
   int numCommunity = gatherKnownCommunityCards(eqCommunity);
@@ -1327,6 +1573,7 @@ void computeAllHandNames() {
   for (int seat = 1; seat <= 4; seat++) {
     if (!playerCardsReady[seat] || playerFoldedRemote[seat]) {
       playerHandName[seat] = "";
+      playerHandShortCode[seat] = "";
       continue;
     }
 
@@ -1339,6 +1586,72 @@ void computeAllHandNames() {
 
     HandCategory category = equity_hand_category(cards, 2 + numCommunity);
     playerHandName[seat] = String(equity_hand_name(category));
+    playerHandShortCode[seat] = String(handShortCode(category));
+  }
+}
+
+// Probability (0-100) of each ready, non-folded seat's FINAL hand being
+// straight/flush/full house OR BETTER — cached in g_straightPct/g_flushPct/
+// g_fullHousePct[]. Runs equity_calculate_category_odds() once per seat; a
+// completely separate Monte Carlo pass from computeAllWinOdds() above, so
+// the existing total-equity calculation is untouched by this.
+void computeAllCategoryOdds() {
+  EqPlayer eqPlayers[4];
+  EqCard eqCommunity[5];
+  int numCommunity = gatherKnownCommunityCards(eqCommunity);
+
+  for (int seat = 1; seat <= 4; seat++) {
+    EqPlayer &p = eqPlayers[seat - 1];
+    p.seat = seat;
+    p.folded = playerFoldedRemote[seat] ? 1 : 0;
+    p.cardsKnown = playerCardsReady[seat] ? 1 : 0;
+    if (p.cardsKnown) {
+      p.hole[0] = tokenToEqCard(playerCard1[seat]);
+      p.hole[1] = tokenToEqCard(playerCard2[seat]);
+    }
+  }
+
+  for (int seat = 1; seat <= 4; seat++) {
+    if (!playerCardsReady[seat] || playerFoldedRemote[seat]) {
+      g_straightPct[seat] = 0;
+      g_flushPct[seat] = 0;
+      g_fullHousePct[seat] = 0;
+      continue;
+    }
+
+    float straightPct, flushPct, fullHousePct;
+    equity_calculate_category_odds(eqPlayers, 4, eqCommunity, numCommunity,
+                                    seat - 1, CATEGORY_ODDS_ITERATIONS,
+                                    &straightPct, &flushPct, &fullHousePct);
+    g_straightPct[seat] = straightPct;
+    g_flushPct[seat] = flushPct;
+    g_fullHousePct[seat] = fullHousePct;
+  }
+}
+
+// Sends one seat's current hand short-code + category odds to their own
+// player board, for display on its 1602 LCD. Skips seats that aren't ready
+// or have folded — the player board only ever shows this info once its own
+// card packet was itself successfully received here in the first place.
+void sendHandInfoToPlayer(int seat) {
+  if (seat < 1 || seat > 4) return;
+  if (!playerEnabled[seat]) return;
+  if (!playerCardsReady[seat] || playerFoldedRemote[seat]) return;
+
+  PlayerHandInfoPacket infoPacket;
+  memset(&infoPacket, 0, sizeof(infoPacket));
+  strncpy(infoPacket.handShortCode, playerHandShortCode[seat].c_str(), sizeof(infoPacket.handShortCode) - 1);
+  infoPacket.straightPct = g_straightPct[seat];
+  infoPacket.flushPct = g_flushPct[seat];
+  infoPacket.fullHousePct = g_fullHousePct[seat];
+  infoPacket.sequence = g_equityUpdateSequence;
+
+  esp_now_send(PLAYER_MACS[seat - 1], (uint8_t *)&infoPacket, sizeof(infoPacket));
+}
+
+void pushHandInfoToAllReadyPlayers() {
+  for (int seat = 1; seat <= 4; seat++) {
+    sendHandInfoToPlayer(seat);
   }
 }
 
@@ -1349,6 +1662,9 @@ void computeAllHandNames() {
 void updateHandEquityInfo() {
   computeAllWinOdds();
   computeAllHandNames();
+  computeAllCategoryOdds();
+  g_equityUpdateSequence++;
+  pushHandInfoToAllReadyPlayers();
 }
 
 // Folded seats (playerFoldedRemote[seat] == true) and seats whose cards
@@ -1433,6 +1749,7 @@ bool fetchBackendState() {
   if (backendPhase == "pre-flop" && previousPhase != "pre-flop" && previousPhase != "idle") {
     Serial.println("Backend phase returned to pre-flop — starting new round.");
     resetForNextRound();
+    playNewHandChime();
   } else if (backendPhase != previousPhase) {
     Serial.printf("Backend phase changed: %s -> %s\n", previousPhase.c_str(), backendPhase.c_str());
   }
@@ -1565,6 +1882,7 @@ void setup() {
 
   // LCD first, so we can show boot status
   Wire.begin(21, 22);
+  Wire.setTimeOut(50);  // bound any I2C op (LCD or telemetry sensors) instead of risking an indefinite stall
   lcd.init();
   lcd.backlight();
   lcd.clear();
@@ -1630,6 +1948,25 @@ void setup() {
   // before the first hand starts.
   fetchBackendState();
 
+  // Power telemetry sensors + audio — deliberately initialized LAST, after
+  // WiFi/ESP-NOW/backend sync are already up. An earlier version of this
+  // ran ina219.begin()/mcp9808.begin() near the top of setup(), before
+  // connectToWiFi()/initEspNow() — if those two sensors aren't physically
+  // wired up (or the I2C bus glitches), the ESP32's I2C peripheral can
+  // stall for a long time or lock up entirely, which meant setup() never
+  // reached connectToWiFi()/initEspNow() at all: the main board would never
+  // come up as an ESP-NOW peer, so EVERY player board send would fail with
+  // no ACK ever coming back — exactly the "0 successful sends" symptom this
+  // fixes. Telemetry failing now can only affect telemetry (see
+  // telemetryAvailable), never anything before it in setup().
+  telemetryAvailable = ina219.begin() && mcp9808.begin();
+  pinMode(AUDIO_PIN, OUTPUT);
+
+  lastScreenSwitchMs = millis();
+
+  // Three beeps — system initialized.
+  playBootChime();
+
   Serial.println();
   Serial.println("Main board ready.");
   Serial.println("Commands:");
@@ -1648,12 +1985,22 @@ void setup() {
 void loop() {
   handleSerialCommands();
 
+  // Handles any player card packet the ESP-NOW receive callback captured
+  // since the last loop() iteration — see handlePendingPlayerPacket() for
+  // why this is done here instead of directly in onDataReceived().
+  handlePendingPlayerPacket();
+
   // Reads 5 community cards using known-good PN5180 code.
   handleCommunityCardReader();
 
   // Polls dealer-controlled phase/fold state from the backend and pushes
   // hole cards, community cards, and win odds back to it.
   handleBackendSync();
+
+  // Reads the power telemetry sensors every 2s and auto-cycles the LCD
+  // between the game-status screen and the telemetry screen.
+  handleTelemetryRead();
+  handleDisplayCycle();
 
   /*
    * Website developer variables:

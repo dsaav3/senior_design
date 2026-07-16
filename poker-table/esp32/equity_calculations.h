@@ -52,6 +52,37 @@ void equity_calculate(const EqPlayer *players, int numPlayers,
                        int iterations, float *winPct);
 
 /*
+ * Computes, for ONE seat (targetIndex, 0-based into players[]), the
+ * probability (0.0-100.0) that their FINAL best 5-card hand (hole cards +
+ * all 5 community cards) is a straight/flush/full house "OR BETTER" —
+ * i.e. structural containment, not exact category matching. A made
+ * straight flush or royal flush counts toward BOTH straightPct and
+ * flushPct (it structurally IS a straight and a flush at once), since
+ * "probability of hitting a flush" means "will I end up with a flush or
+ * better", not "will my final hand be a flush and nothing more". Full
+ * house has no higher category that contains it, so fullHousePct is an
+ * exact match. (An earlier version used exact matching for all three,
+ * which meant a made royal flush showed 0/0/0 here — technically
+ * "correct" under strict category equality, but not what a player means
+ * by the question, and confusing next to a hand that clearly beats all
+ * three.)
+ *
+ * This runs its own independent Monte Carlo simulation of the remaining
+ * board cards — completely separate from equity_calculate() above, which
+ * it does not call or share state with. Other live players' hole cards are
+ * still excluded from the simulated deck (they're known real cards, not
+ * available to be dealt as board cards), same as equity_calculate() does.
+ *
+ * If the target seat is folded, not yet known, or targetIndex is out of
+ * range, all three outputs are set to 0.0.
+ */
+void equity_calculate_category_odds(const EqPlayer *players, int numPlayers,
+                                     const EqCard *community, int numCommunity,
+                                     int targetIndex, int iterations,
+                                     float *straightPct, float *flushPct,
+                                     float *fullHousePct);
+
+/*
  * Hand categories, ordered low-to-high (numerically comparable).
  */
 typedef enum {

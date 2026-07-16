@@ -20,7 +20,7 @@ const SessionCodeDisplay = ({ code, spectatorCount = 0, compact = false }) => {
   return (
     <div
       className={`rounded-2xl flex flex-col items-center animate-pulse-gold flex-shrink-0 ${
-        compact ? "px-5 py-2 gap-1" : "px-6 py-4 gap-2"
+        compact ? "px-5 py-1 gap-0" : "px-6 py-4 gap-2"
       }`}
       style={{
         background: "rgba(212,168,67,0.08)",

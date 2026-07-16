@@ -71,13 +71,21 @@ const SpectatorView = () => {
     <div className="flex flex-col" style={{ height: "100vh", overflow: "hidden" }}>
       {/* Header - fixed height */}
       <header
-        className="flex items-center justify-between px-6 py-3 border-b flex-shrink-0"
+        className="flex items-center justify-between px-6 py-1 border-b flex-shrink-0"
         style={{ borderColor: "rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.3)" }}
       >
         <span className="font-display text-lg" style={{ color: "#d4a843" }}>
           ♠ Smart Poker Table
         </span>
         <div className="flex items-center gap-3">
+          <span className="text-xs text-white/20 font-mono tracking-widest uppercase hidden md:inline">
+            Spectator Mode · Read Only
+          </span>
+          {session.lastEsp32Update && (
+            <span className="text-xs text-white/25 font-mono hidden sm:inline">
+              Last ESP32 update: {new Date(session.lastEsp32Update).toLocaleTimeString()}
+            </span>
+          )}
           <span
             className={`text-xs font-mono px-2 py-0.5 rounded-full ${
               connectionStatus === "connected"
@@ -98,23 +106,15 @@ const SpectatorView = () => {
 
       {/* Main content area - flex-1 to fill remaining space. min-h-0 is required
           so this flex item actually shrinks to the space left by the header
-          instead of growing to fit its (fixed-size) children. */}
-      <div className="flex-1 min-h-0 flex flex-col items-center p-2 gap-2 w-full overflow-hidden">
+          instead of growing to fit its (fixed-size) children. The ESP32
+          timestamp and spectator watermark now live in the header row (free
+          horizontal room there) instead of separate vertical lines here, so
+          all of this area's height goes to the table. */}
+      <div className="flex-1 min-h-0 flex flex-col items-center p-1 gap-1 w-full overflow-hidden">
         <SessionCodeDisplay code={sessionCode} spectatorCount={spectatorCount} compact />
 
-        {session.lastEsp32Update && (
-          <div className="text-xs text-white/25 font-mono flex-shrink-0">
-            Last ESP32 update: {new Date(session.lastEsp32Update).toLocaleTimeString()}
-          </div>
-        )}
-
         <div className="w-full flex-1 min-h-0 overflow-hidden">
-          <PokerTable gameState={session} />
-        </div>
-
-        {/* Spectator watermark */}
-        <div className="text-xs text-white/20 font-mono tracking-widest uppercase flex-shrink-0">
-          Spectator Mode · Read Only
+          <PokerTable gameState={session} variant="spectator" />
         </div>
       </div>
     </div>

@@ -177,7 +177,7 @@ const DealerView = () => {
     <div className="flex flex-col" style={{ height: "100vh", overflow: "hidden" }}>
       {/* Top bar - fixed height */}
       <header
-        className="flex items-center justify-between px-6 py-3 border-b flex-shrink-0"
+        className="flex items-center justify-between px-6 py-1 border-b flex-shrink-0"
         style={{ borderColor: "rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.3)" }}
       >
         <div className="flex items-center gap-3">
@@ -225,9 +225,9 @@ const DealerView = () => {
           min-w-0 on the row) is required at every level so these flex items
           actually shrink to the available space instead of growing to fit
           their (fixed-size) children. */}
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4 p-4 overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-2 p-2 overflow-hidden">
         {/* ── Left: Table View ─────────────────────────────────────── */}
-        <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-2 overflow-hidden">
+        <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-1 overflow-hidden">
           <SessionCodeDisplay code={sessionCode} spectatorCount={spectatorCount} compact />
           <div className="flex-1 min-h-0 overflow-hidden">
             <PokerTable gameState={session} />

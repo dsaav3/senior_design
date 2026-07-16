@@ -301,6 +301,79 @@ void equity_calculate(const EqPlayer *players, int numPlayers,
 }
 
 /* ---------------------------------------------------------------------
+ * Per-category hit-probability for a single seat (straight/flush/full
+ * house) — a completely independent Monte Carlo pass from
+ * equity_calculate() above; does not read or write anything it touches.
+ * ------------------------------------------------------------------- */
+
+void equity_calculate_category_odds(const EqPlayer *players, int numPlayers,
+                                     const EqCard *community, int numCommunity,
+                                     int targetIndex, int iterations,
+                                     float *straightPct, float *flushPct,
+                                     float *fullHousePct) {
+  *straightPct = 0.0f;
+  *flushPct = 0.0f;
+  *fullHousePct = 0.0f;
+
+  if (targetIndex < 0 || targetIndex >= numPlayers || targetIndex >= EQ_MAX_PLAYERS) return;
+  if (players[targetIndex].folded || !players[targetIndex].cardsKnown) return;
+  if (iterations <= 0) return;
+
+  EqCard deck[52];
+  int deckCount = 0;
+  build_remaining_deck(players, numPlayers, community, numCommunity, deck, &deckCount);
+
+  int needed = 5 - numCommunity;
+  if (needed < 0) needed = 0;
+  if (needed > deckCount) needed = deckCount; /* defensive; shouldn't happen */
+
+  int straightCount = 0, flushCount = 0, fullHouseCount = 0;
+  EqCard board[5];
+  EqCard sampleDeck[52];
+
+  for (int trial = 0; trial < iterations; trial++) {
+    memcpy(sampleDeck, deck, sizeof(EqCard) * deckCount);
+    int pool = deckCount;
+
+    for (int i = 0; i < numCommunity; i++) board[i] = community[i];
+
+    for (int i = 0; i < needed; i++) {
+      int pick = rand() % pool;
+      board[numCommunity + i] = sampleDeck[pick];
+      sampleDeck[pick] = sampleDeck[pool - 1];
+      pool--;
+    }
+
+    EqCard sevenCards[7];
+    sevenCards[0] = players[targetIndex].hole[0];
+    sevenCards[1] = players[targetIndex].hole[1];
+    for (int b = 0; b < 5; b++) sevenCards[2 + b] = board[b];
+
+    HandCategory category = equity_hand_category(sevenCards, 7);
+
+    /* "Or better" containment: a straight flush / royal flush IS
+     * structurally a straight AND a flush at once, so it counts toward
+     * both. Full house has nothing above it that contains it, so that one
+     * stays an exact match. */
+    int hasStraight = (category == HAND_STRAIGHT ||
+                        category == HAND_STRAIGHT_FLUSH ||
+                        category == HAND_ROYAL_FLUSH);
+    int hasFlush = (category == HAND_FLUSH ||
+                     category == HAND_STRAIGHT_FLUSH ||
+                     category == HAND_ROYAL_FLUSH);
+    int hasFullHouse = (category == HAND_FULL_HOUSE);
+
+    if (hasStraight) straightCount++;
+    if (hasFlush) flushCount++;
+    if (hasFullHouse) fullHouseCount++;
+  }
+
+  *straightPct = ((float)straightCount / iterations) * 100.0f;
+  *flushPct = ((float)flushCount / iterations) * 100.0f;
+  *fullHousePct = ((float)fullHouseCount / iterations) * 100.0f;
+}
+
+/* ---------------------------------------------------------------------
  * Hand category (for display, e.g. "Two Pair") — reuses the same rank5 /
  * best_hand_score scoring used for equity, just decoded back into a
  * category instead of compared as a raw number.

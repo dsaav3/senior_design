@@ -16,16 +16,16 @@ const OddsBar = ({ odds = 0, isActive = true, isFolded = false }) => {
 
   return (
     <div className="w-full">
-      <div className="flex justify-between items-center mb-1.5">
-        <span className="text-sm text-white/50 font-body">Win odds</span>
+      <div className="flex justify-between items-center mb-1">
+        <span className="text-2xl text-white/50 font-body">Win odds</span>
         <span
-          className="text-base font-bold font-mono"
+          className="text-5xl font-bold font-mono"
           style={{ color: isFolded ? "#555" : "#d4a843" }}
         >
           {isFolded ? "FOLD" : `${pct}%`}
         </span>
       </div>
-      <div className="h-2.5 bg-white/10 rounded-full overflow-hidden">
+      <div className="h-4 bg-white/10 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-700 ease-out ${barColor()}`}
           style={{ width: isFolded ? "0%" : `${pct}%` }}
