@@ -18,11 +18,25 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 
 // ============================================================
 // Debug mode
 // ============================================================
 #define TEST_ONE_READER_ONLY 1   // 1 = test Turn only, 0 = scan Flop/Turn/River
+
+// ESP-NOW requires both ends of a link to be on the EXACT same WiFi
+// channel — a mismatch means packets are never seen at all in either
+// direction, no matter how strong the signal is, which looks identical to
+// a wiring/MAC-address problem and is easy to chase the wrong thing for.
+// This board never joins the real WiFi network (it only speaks ESP-NOW),
+// so left alone it just sits on whatever channel the radio happens to
+// power up on — which has no reason to match the main board's actual
+// channel (decided by the router it connects to). This MUST be set to
+// whatever channel the main board's Serial Monitor prints on boot (see
+// WIFI_CHANNEL in poker_table.ino) — reflash every player board any time
+// that changes, e.g. if the router's channel changes.
+const int WIFI_CHANNEL = 6;
 
 // ============================================================
 // ESP32 Pin Definitions
@@ -821,6 +835,22 @@ void onDataReceived(const esp_now_recv_info_t *recvInfo,
     }
     lastHandInfoSequence = info.sequence;
 
+    // Receiving this at all is definitive proof the main board already has
+    // our cards — it can only have computed and sent this in response to
+    // them. That's a stronger signal than esp_now_send()'s own delivery
+    // status, which is based on a low-level radio ACK that can genuinely
+    // get lost on the way back even when the original data got through and
+    // was fully processed (a real, observed case: main board shows the
+    // cards fine, this board's own send still reports failed). So if we're
+    // still stuck retrying, or already gave up after 3 failed attempts,
+    // this recovers us immediately instead of leaving "Send Failed" up
+    // for cards the main board actually has.
+    if (playerState == SENDING_CARDS_TO_MAIN || playerState == SEND_FAILED) {
+      Serial.println("Hand info arrived while send was still pending/failed — main board has our cards after all, recovering.");
+      playerState = CARDS_SENT_WAITING_FOR_RESET;
+      sendCallbackPending = false;
+    }
+
     char code[5] = {0};
     strncpy(code, info.handShortCode, sizeof(code) - 1);
     currentHandCode = String(code);
@@ -843,6 +873,24 @@ void onDataReceived(const esp_now_recv_info_t *recvInfo,
 
 void initEspNow() {
   WiFi.mode(WIFI_STA);
+
+  // Lock onto WIFI_CHANNEL before anything else — see its comment above.
+  // Without this, this board sits on whatever channel it happens to power
+  // up on (in practice, channel 1), with no reason to match the main
+  // board's actual channel.
+  esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+
+  // Disable WiFi power-save (modem sleep) — by default the ESP32's radio
+  // periodically powers down even without an AP connection, which is a
+  // well-known cause of exactly the symptom seen here: a send occasionally
+  // reported as failed (its ACK missed while the radio was asleep) even
+  // though the main board actually received it fine, and — separately —
+  // incoming packets (like a RESET) sometimes just never arriving either,
+  // since ESP-NOW rides on the same radio and is subject to the same sleep
+  // cycle either side of the link. No real downside on a table unit like
+  // this.
+  WiFi.setSleep(false);
+
   WiFi.setTxPower(WIFI_POWER_2dBm);
   delay(500);
 
@@ -881,6 +929,23 @@ void setup() {
 
   // LCD first, so we can show boot status
   Wire.begin(21, 22);
+
+  // Bound every I2C transaction instead of risking an indefinite stall.
+  // This matters a lot more here than it might look: the pro-mode switch
+  // cuts 5V to this LCD in hardware, so it stops ACKing entirely, but the
+  // code keeps calling lcd.clear()/setCursor()/print() on every state
+  // change regardless — it has no way to know the switch is off. A
+  // PCF8574-backed I2C LCD sends each character over several short I2C
+  // writes (4-bit interface), so a single updatePlayerLCD() call can be
+  // dozens of individual transactions — if each one blocks for the WiFi/
+  // I2C default timeout waiting for an ACK that will never come with the
+  // LCD unpowered, those add up fast and were almost certainly what was
+  // delaying the PN5180 reader between card 1 and card 2. Kept short (5ms)
+  // rather than reusing the main board's 50ms, specifically because it's
+  // the cumulative total across many small transactions per update that
+  // matters here, not any single one.
+  Wire.setTimeOut(5);
+
   lcd.init();
   lcd.backlight();
   lcd.clear();

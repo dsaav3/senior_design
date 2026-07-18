@@ -371,6 +371,44 @@ void equity_calculate_category_odds(const EqPlayer *players, int numPlayers,
   *straightPct = ((float)straightCount / iterations) * 100.0f;
   *flushPct = ((float)flushCount / iterations) * 100.0f;
   *fullHousePct = ((float)fullHouseCount / iterations) * 100.0f;
+
+  /* Lock in 100% for any category the CURRENT hand — using only the cards
+   * actually known so far, no future cards simulated — already satisfies.
+   * Without this, a full house made before the river (e.g. trips+pair from
+   * hole+flop+turn, one card still to come) shows something like 92%
+   * instead of 100%, because the Monte Carlo above is answering "will my
+   * FINAL hand be exactly a full house" — and the one thing a leftover
+   * card can do is complete four of a kind instead, which doesn't count
+   * under full house's exact-match rule (see the "or better" comment
+   * above). That's a different question than "have I hit a full house",
+   * which is what this is for: once you've made it, you've made it,
+   * regardless of what a longshot river card might do instead. Straight
+   * and flush don't actually need this — once made, a leftover card can
+   * only hold or improve them under their own "or better" rule above, so
+   * the Monte Carlo already lands on 100% for those on its own — but
+   * checking all three here is cheap and keeps this in one place. */
+  int knownCount = 2 + numCommunity;
+  if (knownCount >= 5) {
+    EqCard knownCards[7];
+    knownCards[0] = players[targetIndex].hole[0];
+    knownCards[1] = players[targetIndex].hole[1];
+    for (int i = 0; i < numCommunity; i++) knownCards[2 + i] = community[i];
+
+    HandCategory currentCategory = equity_hand_category(knownCards, knownCount);
+    if (currentCategory == HAND_STRAIGHT ||
+        currentCategory == HAND_STRAIGHT_FLUSH ||
+        currentCategory == HAND_ROYAL_FLUSH) {
+      *straightPct = 100.0f;
+    }
+    if (currentCategory == HAND_FLUSH ||
+        currentCategory == HAND_STRAIGHT_FLUSH ||
+        currentCategory == HAND_ROYAL_FLUSH) {
+      *flushPct = 100.0f;
+    }
+    if (currentCategory == HAND_FULL_HOUSE) {
+      *fullHousePct = 100.0f;
+    }
+  }
 }
 
 /* ---------------------------------------------------------------------

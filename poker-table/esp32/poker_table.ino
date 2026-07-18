@@ -71,9 +71,24 @@ const int AUDIO_PIN    = 13;
 const char* WIFI_SSID     = "diego";
 const char* WIFI_PASSWORD = "password";
 
+// ESP-NOW requires both ends of a link to be on the EXACT same WiFi
+// channel — a mismatch means packets are never seen at all in either
+// direction, no matter how strong the signal is, which looks identical to
+// a wiring/MAC-address problem and is easy to chase the wrong thing for.
+// This board's actual channel is decided by the router above, whatever
+// channel it happens to be on — connectToWiFi() below prints it and warns
+// if it doesn't match this constant. The player boards never join that
+// network themselves (they only speak ESP-NOW), so they have no way to
+// discover that channel automatically — each one must have this same
+// value hardcoded (see WIFI_CHANNEL in players_esp_code.ino) and be
+// reflashed if it ever changes. If the router is set to "auto" channel, it
+// can silently change on its own (e.g. after a power cycle) — for a stable
+// table, log into the router and pin it to a fixed channel matching this.
+const int WIFI_CHANNEL = 6;
+
 // Base URL only (no trailing slash) — e.g. "http://192.168.1.50:3001"
 // or "https://your-backend.railway.app"
-const char* BACKEND_HOST  = "http://172.20.10.6:3001";
+const char* BACKEND_HOST  = "http://172.20.10.10:3001";
 
 // Must match ESP32_API_KEY in backend/.env
 const char* ESP32_API_KEY = "srpt";
@@ -1400,10 +1415,20 @@ void handlePendingPlayerPacket() {
   handleIncomingPlayerPacket(incomingPlayerPacketBuffer, incomingPlayerPacketLen);
 }
 
+// This board's own outgoing-send result — used by sendHandInfoToPlayer()'s
+// retry loop below. esp_now_send()'s return value only means "queued OK,"
+// not "delivered"; the real result comes back asynchronously here, same
+// pattern the player boards already use for their own retries.
+volatile bool mainSendCallbackPending = false;
+volatile bool mainLastSendSucceeded = false;
+
 // ESP32 Arduino core 3.x callback
 void onDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+  mainLastSendSucceeded = (status == ESP_NOW_SEND_SUCCESS);
+  mainSendCallbackPending = false;
+
   Serial.print("ESP-NOW send status: ");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+  Serial.println(mainLastSendSucceeded ? "Success" : "Fail");
 }
 
 // ============================================================
@@ -1478,6 +1503,30 @@ void connectToWiFi() {
     Serial.println();
     Serial.print("WiFi connected. IP: ");
     Serial.println(WiFi.localIP());
+    Serial.print("WiFi channel: ");
+    Serial.println(WiFi.channel());
+
+    if (WiFi.channel() != WIFI_CHANNEL) {
+      Serial.println();
+      Serial.println("*** WARNING: router's actual channel does not match the WIFI_CHANNEL");
+      Serial.printf("*** constant (router is on %d, WIFI_CHANNEL is set to %d).\n",
+                    WiFi.channel(), WIFI_CHANNEL);
+      Serial.println("*** Player boards will NOT be able to reach this board over ESP-NOW");
+      Serial.println("*** until WIFI_CHANNEL is updated to match here AND in");
+      Serial.println("*** players_esp_code.ino, and every board is reflashed — or the");
+      Serial.println("*** router is pinned to a fixed channel matching WIFI_CHANNEL.");
+      Serial.println();
+    }
+
+    // Disable WiFi power-save (modem sleep). While connected to an AP like
+    // this, the ESP32 periodically powers its radio down between the AP's
+    // DTIM beacons by default — a well-known cause of exactly the symptom
+    // reported here (packets arrive fine sometimes, other times a send
+    // fails or an incoming packet is just never received, seemingly at
+    // random, on both the sending and receiving side). ESP-NOW rides on
+    // the same radio, so it's subject to the same sleep cycle. This has no
+    // real downside for a mains/battery-charged table unit.
+    WiFi.setSleep(false);
   } else {
     Serial.println();
     Serial.println("WiFi connect FAILED. Backend sync and ESP-NOW peers on other");
@@ -1629,10 +1678,24 @@ void computeAllCategoryOdds() {
   }
 }
 
+const int MAX_HAND_INFO_SEND_ATTEMPTS = 3;
+const uint32_t HAND_INFO_SEND_ACK_TIMEOUT_MS = 100;
+
 // Sends one seat's current hand short-code + category odds to their own
 // player board, for display on its 1602 LCD. Skips seats that aren't ready
 // or have folded — the player board only ever shows this info once its own
 // card packet was itself successfully received here in the first place.
+//
+// Retries up to 3 times on a failed delivery — this direction previously
+// just fired esp_now_send() once and moved on. A real incident showed why
+// that's not enough: a player's card packet reached the main board fine,
+// but the return hand-info push apparently never got through (the player
+// board's own send-failure recovery only helps if a hand-info packet
+// eventually arrives — it never did here), leaving that seat with no odds
+// displayed at all with no further game event to trigger another attempt.
+// This mirrors the retry loop the player boards already use for their own
+// sends, using the same real delivery-status signal (see onDataSent()
+// above) rather than just esp_now_send()'s own "queued OK" return value.
 void sendHandInfoToPlayer(int seat) {
   if (seat < 1 || seat > 4) return;
   if (!playerEnabled[seat]) return;
@@ -1646,12 +1709,48 @@ void sendHandInfoToPlayer(int seat) {
   infoPacket.fullHousePct = g_fullHousePct[seat];
   infoPacket.sequence = g_equityUpdateSequence;
 
-  esp_now_send(PLAYER_MACS[seat - 1], (uint8_t *)&infoPacket, sizeof(infoPacket));
+  for (int attempt = 1; attempt <= MAX_HAND_INFO_SEND_ATTEMPTS; attempt++) {
+    mainSendCallbackPending = true;
+    mainLastSendSucceeded = false;
+
+    esp_err_t result = esp_now_send(PLAYER_MACS[seat - 1], (uint8_t *)&infoPacket, sizeof(infoPacket));
+    if (result != ESP_OK) {
+      // Never queued — onDataSent won't fire for this attempt.
+      Serial.printf("Hand-info send to Player %d queue failed (attempt %d/%d), err %d\n",
+                    seat, attempt, MAX_HAND_INFO_SEND_ATTEMPTS, result);
+      mainSendCallbackPending = false;
+      delay(20);
+      continue;
+    }
+
+    uint32_t waitStart = millis();
+    while (mainSendCallbackPending && millis() - waitStart < HAND_INFO_SEND_ACK_TIMEOUT_MS) {
+      delay(2);
+    }
+
+    if (mainLastSendSucceeded) {
+      return;
+    }
+
+    Serial.printf("Hand-info send to Player %d failed delivery (attempt %d/%d)\n",
+                  seat, attempt, MAX_HAND_INFO_SEND_ATTEMPTS);
+    delay(20);
+  }
+
+  Serial.printf("Hand-info send to Player %d failed after %d attempts — will retry on the next equity update.\n",
+                seat, MAX_HAND_INFO_SEND_ATTEMPTS);
 }
 
 void pushHandInfoToAllReadyPlayers() {
   for (int seat = 1; seat <= 4; seat++) {
     sendHandInfoToPlayer(seat);
+    // Space sends out rather than firing all 4 back-to-back — mirrors
+    // sendResetToAllEnabledPlayers()'s existing delay(50) below. Without
+    // this, four esp_now_send() calls in a tight loop can outrun ESP-NOW's
+    // internal in-flight send queue, causing some to fail purely from
+    // being sent too close together — reported as sporadic failures that
+    // looked like packets "colliding and cancelling out".
+    delay(50);
   }
 }
 
