@@ -87,7 +87,7 @@ const Home = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-6">
       {/* Header */}
       <div className="text-center mb-10">
-        <h1 className="font-display text-5xl font-bold mb-2" style={{ color: "#d4a843" }}>
+        <h1 className="font-display text-3xl sm:text-5xl font-bold mb-2" style={{ color: "#d4a843" }}>
           ♠ Smart Poker Table
         </h1>
         <p className="text-white/40 font-body text-sm tracking-wider uppercase">
@@ -127,7 +127,7 @@ const Home = () => {
               <h2 className="font-display text-xl text-white/90">Start as Dealer</h2>
               <form onSubmit={handleCreate} className="space-y-3">
                 {/* Player names and chip counts */}
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {playerNames.map((name, i) => (
                     <div key={i} className="flex flex-col gap-1">
                       <input

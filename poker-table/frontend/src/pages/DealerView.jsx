@@ -174,7 +174,7 @@ const DealerView = () => {
   const nextPhase = PHASE_NEXT[session.phase];
 
   return (
-    <div className="flex flex-col" style={{ height: "100vh", overflow: "hidden" }}>
+    <div className="flex flex-col full-viewport-height">
       {/* Top bar - fixed height */}
       <header
         className="flex items-center justify-between px-6 py-1 border-b flex-shrink-0"
@@ -236,7 +236,7 @@ const DealerView = () => {
 
         {/* ── Right: Bet Controls per player (scrollable) ──────────────────────────────────── */}
         <div
-          className="lg:w-72 rounded-2xl p-4 space-y-3 overflow-y-auto flex-shrink-0"
+          className="max-h-[45vh] lg:max-h-none lg:w-72 rounded-2xl p-4 space-y-3 overflow-y-auto flex-shrink-0"
           style={{
             background: "rgba(0,0,0,0.2)",
             border: "1px solid rgba(255,255,255,0.06)",

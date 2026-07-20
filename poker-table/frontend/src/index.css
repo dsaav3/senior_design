@@ -21,6 +21,22 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Full-viewport-height pages (Dealer/Spectator views): 100vh fallback for
+   older browsers, upgraded to 100dvh where supported so mobile browser
+   address-bar chrome doesn't clip the bottom of the page. Equivalent to
+   100vh on desktop (no dynamic toolbar there), so this is a no-op visually
+   outside of mobile. */
+.full-viewport-height {
+  height: 100vh;
+  overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  .full-viewport-height {
+    height: 100dvh;
+  }
+}
+
 body {
   background-color: var(--felt-dark);
   color: #f0ece4;
