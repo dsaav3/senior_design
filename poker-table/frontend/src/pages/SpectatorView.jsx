@@ -68,7 +68,7 @@ const SpectatorView = () => {
   }
 
   return (
-    <div className="flex flex-col full-viewport-height">
+    <div className="flex flex-col full-viewport-height overflow-hidden">
       {/* Header - fixed height */}
       <header
         className="flex items-center justify-between px-6 py-1 border-b flex-shrink-0"

@@ -21,14 +21,17 @@ html, body, #root {
   overflow: hidden;
 }
 
-/* Full-viewport-height pages (Dealer/Spectator views): 100vh fallback for
-   older browsers, upgraded to 100dvh where supported so mobile browser
-   address-bar chrome doesn't clip the bottom of the page. Equivalent to
-   100vh on desktop (no dynamic toolbar there), so this is a no-op visually
-   outside of mobile. */
+/* Full-viewport-height pages: 100vh fallback for older browsers, upgraded
+   to 100dvh where supported so mobile browser address-bar chrome doesn't
+   clip the bottom of the page. Equivalent to 100vh on desktop (no dynamic
+   toolbar there), so this is a no-op visually outside of mobile.
+   Deliberately height-only, no overflow here: this compiles AFTER
+   Tailwind's utilities (@tailwind utilities is above), so an overflow rule
+   here would silently beat a same-specificity `overflow-y-auto` utility
+   class used alongside it (exactly what broke scrolling on Home) — pages
+   that want it clipped (Dealer/Spectator) add `overflow-hidden` themselves. */
 .full-viewport-height {
   height: 100vh;
-  overflow: hidden;
 }
 
 @supports (height: 100dvh) {
