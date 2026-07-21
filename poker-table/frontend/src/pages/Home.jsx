@@ -89,7 +89,7 @@ const Home = () => {
       {/* Header */}
       <div className="text-center mb-10">
         <h1 className="font-display text-3xl sm:text-5xl font-bold mb-2" style={{ color: "#d4a843" }}>
-          ♠ Smart Poker Table
+          ♠︎ Smart Poker Table
         </h1>
         <p className="text-white/40 font-body text-sm tracking-wider uppercase">
           RFID-powered live poker tracking

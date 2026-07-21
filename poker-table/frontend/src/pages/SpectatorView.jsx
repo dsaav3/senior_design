@@ -75,7 +75,7 @@ const SpectatorView = () => {
         style={{ borderColor: "rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.3)" }}
       >
         <span className="font-display text-lg" style={{ color: "#d4a843" }}>
-          ♠ Smart Poker Table
+          ♠︎ Smart Poker Table
         </span>
         <div className="flex items-center gap-3">
           <span className="text-xs text-white/20 font-mono tracking-widest uppercase hidden md:inline">

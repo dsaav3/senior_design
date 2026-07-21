@@ -274,7 +274,15 @@ const PokerTable = ({ gameState, variant = "dealer" }) => {
       // room, while the felt itself still fills real leftover space
       // afterward (see feltHeightCeiling below).
       const DEALER_FELT_GROWTH = 2.5;
-      const preferredFeltH = variant === "spectator" ? budgetH : MIN_FELT_HEIGHT * DEALER_FELT_GROWTH;
+      // Spectator's realistic felt height target is now capped the same way
+      // its actual size will be (see feltHeightCeiling below) — using
+      // budgetW as a stand-in for the width it'll end up with, since the
+      // real leftColW/rightColW aren't known yet at this point (they
+      // depend on cornerScale, which this very target feeds into). Without
+      // this, corners were being shrunk to make room for a felt that (after
+      // the height-cap fix) never actually grows that tall on narrow/tall
+      // screens, leaving them smaller than they need to be.
+      const preferredFeltH = variant === "spectator" ? Math.min(budgetH, budgetW / TARGET_ASPECT) : MIN_FELT_HEIGHT * DEALER_FELT_GROWTH;
       const preferredFeltW = variant === "spectator" ? budgetW : MIN_FELT_WIDTH * DEALER_FELT_GROWTH;
 
       const solveCornerScale = (naturalCornerSum, floorFelt, preferredFelt, hardFloorFelt, budget) => {
@@ -313,14 +321,25 @@ const PokerTable = ({ gameState, variant = "dealer" }) => {
       // Felt sizing: "dealer" height is capped at the same 1.5x-grown
       // reference size used as its target above, so it doesn't overshoot
       // that target even if there happens to be more leftover room than
-      // expected. Its WIDTH ceiling, though, uses MAX_FELT_ASPECT rather
-      // than the narrower TARGET_ASPECT — so dealer mode can also stretch
-      // into free horizontal room the same way spectator does, rather than
-      // stopping at the content's natural proportions. "spectator" has no
-      // ceiling at all on either axis and fills whatever's left over, capped
-      // only by MAX_FELT_ASPECT so it stays a recognizable (if stretched)
-      // oval rather than a razor-thin ellipse.
-      const feltHeightCeiling = variant === "spectator" ? Infinity : MIN_FELT_HEIGHT * DEALER_FELT_GROWTH;
+      // expected. "spectator" has no fixed ceiling and fills whatever's
+      // left over — but on a narrow/tall (phone-portrait) screen, width is
+      // the tight budget while height is comparatively huge, so without a
+      // height cap the felt stretches into a tall narrow pillar: content
+      // (cards/pot) crammed into a tiny cluster in the middle, with a lot
+      // of dead green space above and below inside the ellipse. Capping
+      // height at (available width / TARGET_ASPECT) stops exactly there:
+      // since FELT_BASE_WIDTH/FELT_BASE_HEIGHT already equals TARGET_ASPECT,
+      // this cap doesn't shrink the content scale at all versus the old
+      // uncapped behavior (content scale was already the width-bound ratio
+      // on these screens) — it only removes height the content could never
+      // have used anyway, leaving a properly-proportioned oval instead.
+      const availableForFeltWidthArea = availW - leftColW - rightColW - gap * 2 - outerPadding * 2;
+      const feltWidthCandidate = Math.max(60, availableForFeltWidthArea);
+
+      const feltHeightCeiling =
+        variant === "spectator"
+          ? Math.max(ABS_MIN_FELT_HEIGHT, feltWidthCandidate / TARGET_ASPECT)
+          : MIN_FELT_HEIGHT * DEALER_FELT_GROWTH;
       const feltWidthCeiling =
         variant === "spectator" ? Infinity : MIN_FELT_HEIGHT * DEALER_FELT_GROWTH * MAX_FELT_ASPECT;
 
@@ -334,11 +353,20 @@ const PokerTable = ({ gameState, variant = "dealer" }) => {
       // above TARGET_ASPECT (the content's own, narrower proportions) so it
       // only kicks in once the table would otherwise get unreasonably flat,
       // not as soon as it stops matching the content's exact shape.
-      const availableForFeltWidthArea = availW - leftColW - rightColW - gap * 2 - outerPadding * 2;
-      const feltAreaWidth = Math.min(feltWidthCeiling, Math.max(60, availableForFeltWidthArea));
+      const feltAreaWidth = Math.min(feltWidthCeiling, feltWidthCandidate);
       const feltWidth = Math.min(feltAreaWidth, feltHeight * MAX_FELT_ASPECT, availableForFeltWidthArea);
 
-      const feltTop = outerPadding + topRowH + gap;
+      // Spectator's height cap (above) now often leaves real leftover
+      // vertical room beyond the felt's own capped height, on a
+      // narrow/tall screen — center the felt within that space instead of
+      // pinning it flush under the top row, so the reclaimed space reads
+      // as balanced breathing room rather than an odd gap dumped entirely
+      // below the table. Dealer keeps its exact previous flush-top
+      // positioning (it has its own fixed growth target, not this cap).
+      const feltTop =
+        variant === "spectator"
+          ? outerPadding + topRowH + gap + (availableForFeltHeight - feltHeight) / 2
+          : outerPadding + topRowH + gap;
       // Center the (possibly narrower-than-available) felt within its
       // horizontal area rather than pinning it flush left, so capping the
       // width for roundness doesn't leave it looking off-center.

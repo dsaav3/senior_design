@@ -183,7 +183,7 @@ const DealerView = () => {
       >
         <div className="flex items-center gap-3">
           <span className="font-display text-lg" style={{ color: "#d4a843" }}>
-            ♠ Dealer Control
+            ♠︎ Dealer Control
           </span>
           <span
             className={`text-xs font-mono px-2 py-0.5 rounded-full ${
