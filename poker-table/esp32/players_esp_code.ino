@@ -142,6 +142,7 @@ typedef struct {
   float flushPct;
   float fullHousePct;
   uint32_t sequence;
+  uint8_t gameMode;       // 1 = training (show odds), 0 = pro (show "PRO MODE") — must match the main board's struct exactly
 } PlayerHandInfoPacket;
 
 PlayerCardsPacket outgoingPacket;
@@ -182,6 +183,10 @@ float straightPct = 0;
 float flushPct = 0;
 float fullHousePct = 0;
 uint32_t lastHandInfoSequence = 0;  // stale-packet guard — see PlayerHandInfoPacket above
+// Training/pro mode, as tagged by the main board on this packet — 1 =
+// training (default, matches today's behavior if a packet hasn't arrived
+// yet), 0 = pro. See updateHandInfoLCD().
+uint8_t currentGameMode = 1;
 
 // ============================================================
 // Reader Struct
@@ -678,6 +683,19 @@ void updateLCDAllReaders() {
 void updateHandInfoLCD() {
   lcd.clear();
 
+  // Pro mode: hide hand odds entirely, just confirm the card was read —
+  // this is the software replacement for the old physical 5V switch to
+  // this LCD, which was causing an inconsistent I2C hang on some boards
+  // when power was cut mid-transaction. No LCD power is ever touched here.
+  if (currentGameMode == 0) {
+    lcd.setCursor(0, 0);
+    lcd.print("P");
+    lcd.print(PLAYER_ID);
+    lcd.setCursor(0, 1);
+    lcd.print("PRO MODE");
+    return;
+  }
+
   lcd.setCursor(0, 0);
   lcd.print("STR:");
   lcd.print((int)(straightPct + 0.5f));
@@ -869,10 +887,11 @@ void onDataReceived(const esp_now_recv_info_t *recvInfo,
     straightPct = info.straightPct;
     flushPct = info.flushPct;
     fullHousePct = info.fullHousePct;
+    currentGameMode = info.gameMode;
     handInfoReceived = true;
 
-    Serial.printf("Hand info received: %s STR:%.0f%% FL:%.0f%% FH:%.0f%%\n",
-                  code, straightPct, flushPct, fullHousePct);
+    Serial.printf("Hand info received: %s STR:%.0f%% FL:%.0f%% FH:%.0f%% mode:%s\n",
+                  code, straightPct, flushPct, fullHousePct, currentGameMode == 0 ? "PRO" : "TRAINING");
 
     if (playerState == CARDS_SENT_WAITING_FOR_RESET) {
       updatePlayerLCD();
@@ -917,6 +936,14 @@ void connectToWiFiForChannel() {
     Serial.println();
     Serial.print("Connected. WiFi channel: ");
     Serial.println(WiFi.channel());
+
+    // Shown first on boot, before anything else — see setup()'s call order.
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Connected");
+    lcd.setCursor(0, 1);
+    lcd.print(WIFI_SSID);
+    delay(1500);
   } else {
     Serial.println();
     Serial.printf("Could not connect to WiFi — falling back to channel %d. "
@@ -924,6 +951,13 @@ void connectToWiFiForChannel() {
                   "to learn the real channel.\n",
                   WIFI_CHANNEL_FALLBACK, WIFI_SSID);
     esp_wifi_set_channel(WIFI_CHANNEL_FALLBACK, WIFI_SECOND_CHAN_NONE);
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi FAILED");
+    lcd.setCursor(0, 1);
+    lcd.print("Check network");
+    delay(1500);
   }
 
   // Disable WiFi power-save (modem sleep) — by default the ESP32's radio
@@ -998,6 +1032,16 @@ void setup() {
   lcd.init();
   lcd.backlight();
   lcd.clear();
+
+  // WiFi connects first so its status (connected + network, or failed) is
+  // the very first thing shown on the LCD — connectToWiFiForChannel()
+  // (called from initEspNow() below) prints the result itself before
+  // returning here. Moved ahead of the PN5180/SPI setup below purely for
+  // that display ordering; nothing past this point depends on it running
+  // first, or vice versa.
+  initEspNow();
+
+  lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Booting...");
   lcd.setCursor(0, 1);
@@ -1050,7 +1094,6 @@ void setup() {
   // Serial.println("Only Turn reader will be scanned.");
 #endif
 
-  initEspNow();
   updatePlayerLCD();
 
   Serial.println("Setup complete.");

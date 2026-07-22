@@ -5,8 +5,8 @@ const api = axios.create({ baseURL: `${API_URL}/api` });
 
 export const checkTableStatus = () => api.get("/game/status");
 
-export const createSession = (playerNames, chipCounts = [], smallBlind = 10, bigBlind = 20) =>
-  api.post("/game/create", { playerNames, chipCounts, smallBlind, bigBlind });
+export const createSession = (playerNames, chipCounts = [], smallBlind = 10, bigBlind = 20, mode = "training") =>
+  api.post("/game/create", { playerNames, chipCounts, smallBlind, bigBlind, mode });
 
 export const joinSession = (code) =>
   api.get(`/game/join/${code}`);

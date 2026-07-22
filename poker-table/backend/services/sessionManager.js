@@ -94,7 +94,7 @@ const getNextActiveSeat = (fromSeat, players) => {
  * Throws if a session is already active.
  * Accepts chipCounts, smallBlind, and bigBlind parameters.
  */
-const createSession = async (playerNames = [], chipCounts = [], smallBlind = 10, bigBlind = 20) => {
+const createSession = async (playerNames = [], chipCounts = [], smallBlind = 10, bigBlind = 20, mode = "training") => {
   const existing = await getActiveSession();
   if (existing) {
     throw new Error("TABLE_IN_USE");
@@ -131,6 +131,7 @@ const createSession = async (playerNames = [], chipCounts = [], smallBlind = 10,
     bigBlindSeat: 3,
     smallBlind,
     bigBlind,
+    mode: mode === "pro" ? "pro" : "training",
     turnOrder: getPreFlopOrder(1, players),
   });
 

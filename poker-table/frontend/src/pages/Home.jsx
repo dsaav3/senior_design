@@ -15,6 +15,7 @@ const Home = () => {
   const [chipCounts, setChipCounts] = useState([1000, 1000, 1000, 1000]);
   const [smallBlind, setSmallBlind] = useState(10);
   const [bigBlind, setBigBlind] = useState(20);
+  const [mode, setMode] = useState("training");
   const [creating, setCreating] = useState(false);
 
   // Join session form
@@ -42,7 +43,7 @@ const Home = () => {
     setCreating(true);
     setError("");
     try {
-      const res = await createSession(playerNames, chipCounts, smallBlind, bigBlind);
+      const res = await createSession(playerNames, chipCounts, smallBlind, bigBlind, mode);
       navigate(`/dealer/${res.data.session.sessionCode}`);
     } catch (err) {
       if (err.response?.data?.error === "TABLE_IN_USE") {
@@ -127,6 +128,64 @@ const Home = () => {
             >
               <h2 className="font-display text-xl text-white/90">Start as Dealer</h2>
               <form onSubmit={handleCreate} className="space-y-3">
+                {/* Game mode — replaces the old physical 5V switch to the
+                    player LCDs, which was causing inconsistent I2C hangs on
+                    some boards. Training mode keeps the existing hand-odds
+                    display; pro mode tells each player board to show
+                    "PRO MODE" instead once cards are read. */}
+                <div>
+                  <label className="text-xs text-white/40 uppercase tracking-widest font-semibold block mb-1.5">
+                    Game Mode
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMode("training")}
+                      className="rounded-lg px-3 py-2.5 text-left transition-all"
+                      style={{
+                        background: mode === "training" ? "rgba(212,168,67,0.12)" : "rgba(255,255,255,0.05)",
+                        border: `1px solid ${mode === "training" ? "rgba(212,168,67,0.5)" : "rgba(255,255,255,0.1)"}`,
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span>🎓</span>
+                        <span
+                          className="text-sm font-semibold"
+                          style={{ color: mode === "training" ? "#d4a843" : "#ffffff" }}
+                        >
+                          Training Mode
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/40 leading-snug">
+                        Shows probabilities of hitting strong combinations
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setMode("pro")}
+                      className="rounded-lg px-3 py-2.5 text-left transition-all"
+                      style={{
+                        background: mode === "pro" ? "rgba(212,168,67,0.12)" : "rgba(255,255,255,0.05)",
+                        border: `1px solid ${mode === "pro" ? "rgba(212,168,67,0.5)" : "rgba(255,255,255,0.1)"}`,
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span>🕶️</span>
+                        <span
+                          className="text-sm font-semibold"
+                          style={{ color: mode === "pro" ? "#d4a843" : "#ffffff" }}
+                        >
+                          Pro Mode
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/40 leading-snug">
+                        Hides all game data
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Player names and chip counts */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {playerNames.map((name, i) => (

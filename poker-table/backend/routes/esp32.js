@@ -124,11 +124,17 @@ router.post("/update", validateApiKey, async (req, res) => {
 // ── GET /api/esp32/state ──────────────────────────────────────────────────────
 /**
  * Polled by the ESP32 to learn the dealer-controlled game phase (pre-flop,
- * flop, turn, river, showdown) and which seats have folded. The website is
- * the source of truth for both — the dealer advances phase via
- * POST /api/game/phase and folds a player via POST /api/game/action — so the
- * ESP32 reads them here instead of tracking phase itself. A folded seat's
- * hole cards must be excluded from equity/odds calculations on the ESP32.
+ * flop, turn, river, showdown), which seats have folded, and the session's
+ * training/pro mode. The website is the source of truth for all of these —
+ * the dealer advances phase via POST /api/game/phase, folds a player via
+ * POST /api/game/action, and mode is fixed at session creation — so the
+ * ESP32 reads them here instead of tracking any of it itself. A folded
+ * seat's hole cards must be excluded from equity/odds calculations on the
+ * ESP32. `mode` replaces the old physical 5V switch to the player LCDs:
+ * in "pro" mode, the main board still computes everything as normal, but
+ * tags each PlayerHandInfoPacket so the player board shows "PRO MODE"
+ * instead of the hand odds, without ever cutting LCD power (which was
+ * causing an inconsistent I2C hang on some player boards).
  */
 router.get("/state", validateApiKey, async (req, res) => {
   try {
@@ -145,6 +151,7 @@ router.get("/state", validateApiKey, async (req, res) => {
       sessionCode: session.sessionCode,
       status: session.status,
       phase: session.phase,
+      mode: session.mode,
       communityCards: session.communityCards,
       players: session.players.map((p) => ({
         seat: p.seat,

@@ -244,12 +244,19 @@ typedef struct {
 // race — showed it correctly). The player board now drops any packet
 // whose sequence isn't newer than the last one it displayed, the same way
 // PlayerCardsPacket.sequence already protects the other direction.
+// `gameMode` (1 = training, 0 = pro — see g_gameMode below) replaces the old
+// physical 5V switch to the player LCDs, which was cutting power to some
+// boards' LCDs while their I2C bus was mid-transaction, leaving them
+// inconsistently hung. Software-selected mode never touches LCD power, so
+// that failure mode can't happen — the player board just chooses what to
+// draw once this arrives, same as it always has for the other fields here.
 typedef struct {
   char handShortCode[4];  // e.g. "2P", "STR", "RF" — short enough for a 1602 LCD
   float straightPct;
   float flushPct;
   float fullHousePct;
   uint32_t sequence;
+  uint8_t gameMode;       // 1 = training (show odds), 0 = pro (show "PRO MODE")
 } PlayerHandInfoPacket;
 
 // ============================================================
@@ -323,6 +330,13 @@ uint32_t currentRoundNumber = 1;
 bool backendSessionActive = false;      // is there an active session on the backend?
 String activeSessionCode = "";          // discovered from GET /api/esp32/state
 String backendPhase = "idle";           // dealer-controlled phase from the website
+// Training/pro mode, chosen on the website at session creation (GET
+// /api/esp32/state's "mode" field) — 1 = training (show hand odds on the
+// player LCDs, today's behavior), 0 = pro (show "PRO MODE" instead once
+// cards are read). Defaults to training so a board that hasn't polled the
+// backend yet (or an older backend without this field) behaves exactly as
+// before.
+uint8_t g_gameMode = 1;
 bool playerFoldedRemote[5] = {false, false, false, false, false}; // index 1-4 used
 float playerWinOdds[5] = {0, 0, 0, 0, 0};
 
@@ -1546,6 +1560,14 @@ void connectToWiFi() {
     Serial.print("WiFi channel: ");
     Serial.println(WiFi.channel());
 
+    // Shown first on boot, before anything else — see setup()'s call order.
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Connected");
+    lcd.setCursor(0, 1);
+    lcd.print(WIFI_SSID);
+    delay(1500);
+
     // Disable WiFi power-save (modem sleep). While connected to an AP like
     // this, the ESP32 periodically powers its radio down between the AP's
     // DTIM beacons by default — a well-known cause of exactly the symptom
@@ -1559,6 +1581,13 @@ void connectToWiFi() {
     Serial.println();
     Serial.println("WiFi connect FAILED. Backend sync and ESP-NOW peers on other");
     Serial.println("channels may not work until this board reconnects.");
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi FAILED");
+    lcd.setCursor(0, 1);
+    lcd.print("Check network");
+    delay(1500);
   }
 }
 
@@ -1736,6 +1765,7 @@ void sendHandInfoToPlayer(int seat) {
   infoPacket.flushPct = g_flushPct[seat];
   infoPacket.fullHousePct = g_fullHousePct[seat];
   infoPacket.sequence = g_equityUpdateSequence;
+  infoPacket.gameMode = g_gameMode;
 
   for (int attempt = 1; attempt <= MAX_HAND_INFO_SEND_ATTEMPTS; attempt++) {
     mainSendCallbackPending = true;
@@ -1848,6 +1878,14 @@ bool fetchBackendState() {
   backendSessionActive = true;
   activeSessionCode = doc["sessionCode"].as<String>();
   backendPhase = doc["phase"].as<String>();
+
+  // "mode" defaults to "training" if an older backend doesn't send it at all.
+  String modeStr = doc["mode"] | "training";
+  uint8_t newGameMode = (modeStr == "pro") ? 0 : 1;
+  if (newGameMode != g_gameMode) {
+    g_gameMode = newGameMode;
+    Serial.printf("Game mode changed to: %s\n", g_gameMode == 0 ? "PRO" : "TRAINING");
+  }
 
   JsonArray players = doc["players"].as<JsonArray>();
   for (JsonObject p : players) {
@@ -2013,6 +2051,17 @@ void setup() {
   lcd.init();
   lcd.backlight();
   lcd.clear();
+
+  // WiFi connects first so its status (connected + network, or failed) is
+  // the very first thing shown on the LCD — connectToWiFi() prints the
+  // result itself before returning here. Moved ahead of the PN5180/SPI
+  // setup below purely for that display ordering; nothing past this point
+  // depends on it running first, or vice versa. (ESP-NOW init and
+  // telemetry still follow WiFi in the same relative order as before —
+  // only their position relative to the PN5180 reader setup changed.)
+  connectToWiFi();
+
+  lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Booting...");
   lcd.setCursor(0, 1);
@@ -2066,8 +2115,9 @@ void setup() {
 
 #endif
 
-  // Connect to WiFi BEFORE ESP-NOW init so both ride on the same channel.
-  connectToWiFi();
+  // WiFi already connected earlier (see above, right after LCD init) so its
+  // status could be shown first on the LCD — ESP-NOW just needs to come up
+  // on the same channel WiFi already resolved.
 
   // Skip TLS certificate validation for the backend connection (still
   // encrypted, just not verifying the server's identity) — see

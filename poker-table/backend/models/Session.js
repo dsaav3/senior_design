@@ -50,6 +50,11 @@ const SessionSchema = new mongoose.Schema(
       enum: ["pre-flop", "flop", "turn", "river", "showdown", "idle"],
       default: "idle",
     },
+    mode: {
+      type: String,
+      enum: ["training", "pro"],
+      default: "training",
+    },
     players: { type: [PlayerSchema], default: [] },
     communityCards: { type: [CardSchema], default: [] }, // up to 5
     pot: { type: Number, default: 0 },

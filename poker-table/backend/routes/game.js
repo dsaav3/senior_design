@@ -28,13 +28,13 @@ router.get("/status", async (req, res) => {
 
 // ── POST /api/game/create ─────────────────────────────────────────────────────
 // Dealer creates a new session
-// Body: { playerNames, chipCounts?, smallBlind?, bigBlind? }
+// Body: { playerNames, chipCounts?, smallBlind?, bigBlind?, mode? }
 router.post("/create", async (req, res) => {
   try {
-    const { playerNames, chipCounts = [], smallBlind = 10, bigBlind = 20 } = req.body;
-    console.log("Creating session with:", { playerNames, chipCounts, smallBlind, bigBlind });
-    
-    const session = await createSession(playerNames || [], chipCounts, smallBlind, bigBlind);
+    const { playerNames, chipCounts = [], smallBlind = 10, bigBlind = 20, mode = "training" } = req.body;
+    console.log("Creating session with:", { playerNames, chipCounts, smallBlind, bigBlind, mode });
+
+    const session = await createSession(playerNames || [], chipCounts, smallBlind, bigBlind, mode);
     console.log("Session created:", session.sessionCode);
     
     // Apply blinds immediately after session creation
